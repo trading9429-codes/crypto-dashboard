@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <title>Crypto Spike Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+</head>
+<body class="bg-gray-950 text-gray-200 font-sans">
+
+  <!-- ✅ Status Bar -->
+  <div id="status-bar" 
+       class="sticky top-0 z-20 bg-gray-900 text-gray-400 text-sm px-4 py-2 shadow-md flex justify-between items-center">
+    <div id="connection-status" class="font-semibold">🔴 Disconnected</div>
+    <div class="flex gap-6">
+      <span id="last-updated">Last Updated: --</span>
+      <span id="next-refresh">Next Refresh: --</span>
+    </div>
+  </div>
+
+  <!-- ✅ Table -->
+  <div class="p-6">
+    <div class="overflow-x-auto rounded-lg shadow-lg">
+      <table class="table-auto w-full border-collapse border border-gray-800">
+        <thead class="bg-gray-800 text-gray-300 text-sm uppercase">
+          <tr>
+            <th class="px-4 py-2 text-left">Symbol</th>
+            <th class="px-4 py-2 text-left">Time (IST)</th>
+            <th class="px-4 py-2 text-left">Volume</th>
+            <th class="px-4 py-2 text-left">Rel Vol</th>
+            <th class="px-4 py-2 text-left">LTP (INR)</th>
+          </tr>
+        </thead>
+        <tbody id="data-body" class="text-sm"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ✅ Toast Container -->
+  <div id="toast-container" class="fixed top-5 right-5 space-y-2 z-50"></div>
+
+  <script>
+    const statusEl = document.getElementById("connection-status");
+    const REFRESH_INTERVAL = 30; // seconds
+    let countdown = REFRESH_INTERVAL;
+    let countdownTimer;
+    let lastData = {};
+    let ws;
+
+    // ✅ WebSocket connect
+    function connectWS () {
+      ws = new WebSocket(`ws://${location.host}`);
+      ws.onopen = () => {
+        statusEl.textContent = "🟢 Connected";
+        statusEl.className = "mb-4 text-sm text-green-400";
+      };
+   
+
+      ws.onclose = () => {
+        statusEl.textContent = "🔴 Disconnected";
+        statusEl.classList.remove("text-green-400");
+        statusEl.classList.add("text-red-400");
+        clearInterval(countdownTimer);
+        document.getElementById("next-refresh").textContent = "Next Refresh: --";
+        setTimeout(connectWS, 3000); // auto-reconnect
+      };
+
+      ws.onmessage = (msg) => {
+        const data = JSON.parse(msg.data);
+        renderTable(data);
+      };
+    }
+
+    // ✅ Toast
+    function showToast(symbol, time) {
+      const container = document.getElementById("toast-container");
+      const toast = document.createElement("div");
+      toast.className =
+        "px-4 py-2 rounded-lg shadow-lg bg-gray-800 text-white animate-fade-in-up";
+      toast.textContent = `Spike: ${symbol} @ ${time}`;
+      container.appendChild(toast);
+      setTimeout(() => toast.remove(), 5000);
+    }
+
+    // ✅ Render table
+    function renderTable(data) {
+      const body = document.getElementById("data-body");
+      body.innerHTML = "";
+
+      // 🔥 sort by last spike time first, then rel vol
+      const sorted = Object.entries(data).sort((a, b) => {
+        const tA = moment(a[1].time, "h:mm A");
+        const tB = moment(b[1].time, "h:mm A");
+        if (tB - tA !== 0) return tB - tA;
+        const relVolA = a[1].avg > 0 ? a[1].volume / a[1].avg : 0;
+        const relVolB = b[1].avg > 0 ? b[1].volume / b[1].avg : 0;
+        return relVolB - relVolA;
+      });
+
+      // ✅ update timestamps
+      document.getElementById("last-updated").textContent =
+        "Last Updated: " + moment().format("YYYY-MM-DD HH:mm:ss");
+      countdown = REFRESH_INTERVAL;
+      if (countdownTimer) clearInterval(countdownTimer);
+      countdownTimer = setInterval(() => {
+        document.getElementById("next-refresh").textContent =
+          "Next Refresh: " + countdown + "s";
+        if (countdown <= 0) clearInterval(countdownTimer);
+        countdown--;
+      }, 1000);
+
+      // ✅ render rows
+      sorted.forEach(([symbol, entries]) => {
+  const latest = entries[0]; // take the most recent
+  if (!latest) return;
+
+  const { time, volume, avg, ltp_inr } = latest;
+  const relVol = avg > 0 ? (volume / avg).toFixed(2) : "0.00";
+
+  const tr = document.createElement("tr");
+  tr.className = "border-b border-gray-800 hover:bg-gray-800 transition";
+
+  tr.innerHTML = `
+    <td class="py-2 font-bold">
+      <a href="https://www.tradingview.com/chart/?symbol=BINANCE:${symbol}" 
+         target="_blank" 
+         class="text-blue-400 hover:underline">${symbol}</a>
+    </td>
+    <td class="py-2">${time}</td>
+    <td class="py-2 text-green-400">${volume.toFixed(2)}</td>
+    <td class="py-2 text-yellow-400">${relVol}</td>
+    <td class="py-2 text-pink-400">₹${ltp_inr?.toLocaleString("en-IN", { maximumFractionDigits: 2 }) || "-"}</td>
+  `;
+
+  if (!lastData[symbol] || lastData[symbol][0]?.time !== time) {
+    tr.classList.add("bg-gray-700 transition");
+    showToast(symbol, time);
+  }
+
+  body.appendChild(tr);
+});
+
+      lastData = data;
+    }
+
+    // ✅ animations
+    const style = document.createElement("style");
+    style.textContent = `
+      @keyframes fade-in-up {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      .animate-fade-in-up {
+        animation: fade-in-up 0.4s ease-out;
+      }
+    `;
+    document.head.appendChild(style);
+
+    // start
+    connectWS();
+  </script>
+</body>
+</html>
